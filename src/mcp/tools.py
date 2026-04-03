@@ -15,6 +15,8 @@ from src.api.client import KeapApiService
 from src.cache.manager import CacheManager
 
 logger = logging.getLogger(__name__)
+_API_CLIENT: Optional[KeapApiService] = None
+_CACHE_MANAGER: Optional[CacheManager] = None
 
 
 # Initialize shared components
@@ -22,15 +24,41 @@ def get_api_client() -> KeapApiService:
     """Get or create API client instance."""
     import os
 
-    # For testing, provide a default API key if none exists
-    if not os.getenv("KEAP_API_KEY"):
-        os.environ["KEAP_API_KEY"] = "test_api_key_for_testing"
-    return KeapApiService()
+    global _API_CLIENT
+    is_test = bool(os.getenv("PYTEST_CURRENT_TEST"))
+    if _API_CLIENT is not None and not is_test:
+        return _API_CLIENT
+
+    if not os.getenv("KEAP_API_KEY") and is_test:
+        client = KeapApiService(api_key="test_api_key_for_testing")
+    else:
+        client = KeapApiService()
+
+    if not is_test:
+        _API_CLIENT = client
+    return client
+
+
+class _ContextWithDeps:
+    """Lightweight context wrapper for tool implementations."""
+
+    def __init__(self):
+        self.api_client = get_api_client()
+        self.cache_manager = get_cache_manager()
 
 
 def get_cache_manager() -> CacheManager:
     """Get or create cache manager instance."""
-    return CacheManager()
+    import os
+
+    global _CACHE_MANAGER
+    is_test = bool(os.getenv("PYTEST_CURRENT_TEST"))
+    if _CACHE_MANAGER is None or is_test:
+        cache_manager = CacheManager()
+        if not is_test:
+            _CACHE_MANAGER = cache_manager
+        return cache_manager
+    return _CACHE_MANAGER
 
 
 # Main tool functions for MCP server
@@ -48,21 +76,18 @@ async def list_contacts(
     This function now uses the optimized query engine for better performance.
     For advanced features like performance metrics, use query_contacts_optimized directly.
     """
-    # Use the optimized query function internally but maintain the simple interface
-    result = await query_contacts_optimized(
-        context=context,
+    from src.mcp.contact_tools import list_contacts as _list_contacts
+
+    ctx = _ContextWithDeps()
+    return await _list_contacts(
+        context=ctx,
         filters=filters,
         limit=limit,
         offset=offset,
         order_by=order_by,
         order_direction=order_direction,
         include=include,
-        enable_optimization=True,
-        return_metrics=False,
     )
-
-    # Return just the contacts list for backward compatibility
-    return result["contacts"]
 
 
 async def get_tags(
@@ -74,13 +99,7 @@ async def get_tags(
     """Get tags with optional filtering."""
     from src.mcp.tag_tools import get_tags as _get_tags
 
-    # Create a context-like object with required dependencies
-    class ContextWithDeps:
-        def __init__(self):
-            self.api_client = get_api_client()
-            self.cache_manager = get_cache_manager()
-
-    ctx = ContextWithDeps()
+    ctx = _ContextWithDeps()
 
     return await _get_tags(
         context=ctx, filters=filters, include_categories=include_categories, limit=limit
@@ -93,13 +112,7 @@ async def search_contacts_by_email(
     """Search contacts by email address."""
     from src.mcp.contact_tools import search_contacts_by_email as _search_by_email
 
-    # Create a context-like object with required dependencies
-    class ContextWithDeps:
-        def __init__(self):
-            self.api_client = get_api_client()
-            self.cache_manager = get_cache_manager()
-
-    ctx = ContextWithDeps()
+    ctx = _ContextWithDeps()
 
     return await _search_by_email(context=ctx, email=email, include=include)
 
@@ -110,13 +123,7 @@ async def search_contacts_by_name(
     """Search contacts by name."""
     from src.mcp.contact_tools import search_contacts_by_name as _search_by_name
 
-    # Create a context-like object with required dependencies
-    class ContextWithDeps:
-        def __init__(self):
-            self.api_client = get_api_client()
-            self.cache_manager = get_cache_manager()
-
-    ctx = ContextWithDeps()
+    ctx = _ContextWithDeps()
 
     return await _search_by_name(context=ctx, name=name, include=include)
 
@@ -127,13 +134,7 @@ async def get_contacts_with_tag(
     """Get contacts that have a specific tag."""
     from src.mcp.tag_tools import get_contacts_with_tag as _get_contacts_with_tag
 
-    # Create a context-like object with required dependencies
-    class ContextWithDeps:
-        def __init__(self):
-            self.api_client = get_api_client()
-            self.cache_manager = get_cache_manager()
-
-    ctx = ContextWithDeps()
+    ctx = _ContextWithDeps()
 
     return await _get_contacts_with_tag(
         context=ctx, tag_id=tag_id, limit=limit, include=include
@@ -146,13 +147,7 @@ async def get_contact_details(
     """Get detailed information about a specific contact."""
     from src.mcp.contact_tools import get_contact_details as _get_contact_details
 
-    # Create a context-like object with required dependencies
-    class ContextWithDeps:
-        def __init__(self):
-            self.api_client = get_api_client()
-            self.cache_manager = get_cache_manager()
-
-    ctx = ContextWithDeps()
+    ctx = _ContextWithDeps()
 
     return await _get_contact_details(
         context=ctx, contact_id=contact_id, include=include
@@ -163,13 +158,7 @@ async def get_tag_details(context: Context, tag_id: str) -> Dict[str, Any]:
     """Get detailed information about a specific tag."""
     from src.mcp.tag_tools import get_tag_details as _get_tag_details
 
-    # Create a context-like object with required dependencies
-    class ContextWithDeps:
-        def __init__(self):
-            self.api_client = get_api_client()
-            self.cache_manager = get_cache_manager()
-
-    ctx = ContextWithDeps()
+    ctx = _ContextWithDeps()
 
     return await _get_tag_details(context=ctx, tag_id=tag_id)
 
@@ -180,13 +169,7 @@ async def apply_tags_to_contacts(
     """Apply multiple tags to multiple contacts using batch operations."""
     from src.mcp.tag_tools import apply_tags_to_contacts as _apply_tags_to_contacts
 
-    # Create a context-like object with required dependencies
-    class ContextWithDeps:
-        def __init__(self):
-            self.api_client = get_api_client()
-            self.cache_manager = get_cache_manager()
-
-    ctx = ContextWithDeps()
+    ctx = _ContextWithDeps()
 
     return await _apply_tags_to_contacts(
         context=ctx, tag_ids=tag_ids, contact_ids=contact_ids
@@ -201,13 +184,7 @@ async def remove_tags_from_contacts(
         remove_tags_from_contacts as _remove_tags_from_contacts,
     )
 
-    # Create a context-like object with required dependencies
-    class ContextWithDeps:
-        def __init__(self):
-            self.api_client = get_api_client()
-            self.cache_manager = get_cache_manager()
-
-    ctx = ContextWithDeps()
+    ctx = _ContextWithDeps()
 
     return await _remove_tags_from_contacts(
         context=ctx, tag_ids=tag_ids, contact_ids=contact_ids
@@ -223,13 +200,7 @@ async def create_tag(
     """Create a new tag."""
     from src.mcp.tag_tools import create_tag as _create_tag
 
-    # Create a context-like object with required dependencies
-    class ContextWithDeps:
-        def __init__(self):
-            self.api_client = get_api_client()
-            self.cache_manager = get_cache_manager()
-
-    ctx = ContextWithDeps()
+    ctx = _ContextWithDeps()
 
     return await _create_tag(
         context=ctx, name=name, description=description, category_id=category_id
@@ -554,13 +525,7 @@ async def modify_tags(
 ) -> Dict[str, Any]:
     """Add or remove tags from contacts."""
 
-    # Create a context-like object with required dependencies
-    class ContextWithDeps:
-        def __init__(self):
-            self.api_client = get_api_client()
-            self.cache_manager = get_cache_manager()
-
-    ctx = ContextWithDeps()
+    ctx = _ContextWithDeps()
 
     try:
         if action == "add":
@@ -762,13 +727,7 @@ async def set_custom_field_values(
         Result with success/error information
     """
 
-    # Create a context-like object with required dependencies
-    class ContextWithDeps:
-        def __init__(self):
-            self.api_client = get_api_client()
-            self.cache_manager = get_cache_manager()
-
-    ctx = ContextWithDeps()
+    ctx = _ContextWithDeps()
 
     try:
         api_client = ctx.api_client
@@ -896,6 +855,26 @@ async def set_custom_field_values(
     except Exception as e:
         logger.error(f"Error setting custom field values: {e}")
         return {"success": False, "error": str(e)}
+
+
+async def get_keap_oauth_login_url(
+    context: Context, scope: str = "full", state: Optional[str] = None
+) -> Dict[str, Any]:
+    """Build a Keap OAuth login URL using configured client settings."""
+    import os
+
+    client_id = os.getenv("KEAP_CLIENT_ID")
+    redirect_uri = os.getenv("KEAP_OAUTH_REDIRECT_URI")
+    if not client_id or not redirect_uri:
+        return {
+            "success": False,
+            "error": "KEAP_CLIENT_ID and KEAP_OAUTH_REDIRECT_URI are required",
+        }
+
+    url = KeapApiService.build_oauth_authorization_url(
+        client_id=client_id, redirect_uri=redirect_uri, scope=scope, state=state
+    )
+    return {"success": True, "authorization_url": url}
 
 
 # MCP tool registry
