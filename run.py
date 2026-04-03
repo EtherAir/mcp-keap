@@ -57,12 +57,14 @@ def setup_logging(log_level: str = "INFO", log_file: str = None):
 
 def main():
     """Main entry point"""
+    default_host = "0.0.0.0" if os.getenv("PORT") else "127.0.0.1"
+
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Keap MCP Server")
     parser.add_argument(
         "--host",
         type=str,
-        default=os.getenv("HOST", "127.0.0.1"),
+        default=os.getenv("HOST", default_host),
         help="Host to bind to",
     )
     parser.add_argument(
@@ -81,6 +83,19 @@ def main():
     parser.add_argument(
         "--log-file", type=str, default=os.getenv("LOG_FILE"), help="Log file path"
     )
+    parser.add_argument(
+        "--transport",
+        type=str,
+        default=os.getenv("MCP_TRANSPORT", "streamable-http"),
+        choices=["streamable-http", "http", "sse", "stdio"],
+        help="MCP transport to use",
+    )
+    parser.add_argument(
+        "--path",
+        type=str,
+        default=os.getenv("MCP_PATH", "/mcp"),
+        help="HTTP MCP endpoint path",
+    )
 
     args = parser.parse_args()
 
@@ -92,13 +107,14 @@ def main():
     logger.info(f"  host: {args.host}")
     logger.info(f"  port: {args.port}")
     logger.info(f"  log_level: {args.log_level}")
+    logger.info(f"  transport: {args.transport}")
     if args.log_file:
         logger.info(f"  log_file: {args.log_file}")
 
     # Create and run the server
     try:
         server = KeapMCPServer()
-        server.run(host=args.host, port=args.port)
+        server.run(host=args.host, port=args.port, transport=args.transport, path=args.path)
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
     except Exception as e:

@@ -8,13 +8,24 @@ to reduce API calls, improve response times, and survive restarts.
 import time
 import sqlite3
 import logging
-import pickle
+import json
 import threading
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
+
+
+def _serialize_value(value: Any) -> bytes:
+    """Serialize cache value using JSON to avoid unsafe deserialization."""
+    payload = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    return payload.encode("utf-8")
+
+
+def _deserialize_value(value: bytes) -> Any:
+    """Deserialize cache value using JSON."""
+    return json.loads(value.decode("utf-8"))
 
 
 class PersistentCacheManager:
@@ -149,8 +160,8 @@ class PersistentCacheManager:
 
                     # Deserialize value
                     try:
-                        return pickle.loads(row[0])  # nosec B301 - Controlled pickle usage in cache
-                    except (pickle.PickleError, TypeError) as e:
+                        return _deserialize_value(row[0])
+                    except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
                         logger.warning(
                             f"Failed to deserialize cached value for key {key}: {e}"
                         )
@@ -173,8 +184,8 @@ class PersistentCacheManager:
             try:
                 # Serialize value
                 try:
-                    serialized_value = pickle.dumps(value)
-                except (pickle.PickleError, TypeError) as e:
+                    serialized_value = _serialize_value(value)
+                except (TypeError, ValueError) as e:
                     logger.warning(f"Cannot serialize value for key '{key}': {e}")
                     return  # Skip caching if value cannot be serialized
 
@@ -212,7 +223,7 @@ class PersistentCacheManager:
                     # Track IDs for invalidation
                     self._track_ids(conn, key, value)
 
-            except (sqlite3.Error, pickle.PickleError) as e:
+            except (sqlite3.Error, ValueError, TypeError) as e:
                 logger.error(f"Cache set error for key {key}: {e}")
 
     def _ensure_space(self, required_bytes: int) -> None:
