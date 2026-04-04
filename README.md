@@ -101,6 +101,12 @@ The server exposes 17 comprehensive MCP tools:
    - The configuration includes:
      ```
      KEAP_API_KEY=your_api_key_here
+     KEAP_ACCESS_TOKEN=your_oauth_access_token_here
+     KEAP_REFRESH_TOKEN=your_oauth_refresh_token_here
+     KEAP_CLIENT_ID=your_oauth_client_id
+     KEAP_CLIENT_SECRET=your_oauth_client_secret
+     KEAP_OAUTH_REDIRECT_URI=https://your-domain/oauth/callback
+     KEAP_OAUTH_TOKEN_FILE=/data/keap_oauth_tokens.json
      KEAP_API_BASE_URL=https://api.infusionsoft.com/crm/rest/v1
      KEAP_MCP_HOST=127.0.0.1
      KEAP_MCP_PORT=5000
@@ -110,10 +116,16 @@ The server exposes 17 comprehensive MCP tools:
      KEAP_MCP_CACHE_TTL=3600
      ```
 
+OAuth note:
+- You can use either `KEAP_API_KEY` (legacy/personal token style) or OAuth tokens.
+- For Railway deployment and production apps, OAuth (`KEAP_ACCESS_TOKEN` + `KEAP_REFRESH_TOKEN`) is recommended.
+- See `docs/RAILWAY_DEPLOYMENT.md` for full deployment and OAuth bootstrap instructions.
+- Automatic connect endpoint: `GET /oauth/connect` (redirects user to Keap OAuth and stores tokens on callback).
+
 ### Running the Server
 
 ```
-python run.py --host 127.0.0.1 --port 5000
+python run.py --host 127.0.0.1 --port 5000 --transport streamable-http --path /mcp
 ```
 
 Command-line options:
@@ -121,7 +133,8 @@ Command-line options:
 - `--port` - Port to listen on (default: 5000)
 - `--log-level` - Logging level (default: INFO)
 - `--log-file` - Log file path (default: keap_mcp_server.log)
-- `--no-console-log` - Disable console logging
+- `--transport` - MCP transport (`streamable-http`, `http`, `sse`, or `stdio`)
+- `--path` - HTTP endpoint path for MCP transport (default: `/mcp`)
 
 ## Testing & Coverage
 

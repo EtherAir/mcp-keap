@@ -9,12 +9,48 @@ import os
 import time
 import logging
 import asyncio
+import json
+from pathlib import Path
+from urllib.parse import urlencode
 from typing import Dict, List, Any, Optional
 
 import httpx
 from httpx import AsyncClient, Response
 
 logger = logging.getLogger(__name__)
+
+
+def _token_store_path() -> Path:
+    """Get local OAuth token store path."""
+    return Path(os.getenv("KEAP_OAUTH_TOKEN_FILE", "keap_oauth_tokens.json"))
+
+
+def load_stored_oauth_tokens() -> Dict[str, str]:
+    """Load OAuth tokens from local token store file if present."""
+    path = _token_store_path()
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("Failed to load OAuth token store: %s", e)
+        return {}
+
+
+def save_oauth_tokens(tokens: Dict[str, Any]) -> None:
+    """Persist OAuth access/refresh tokens to local token store."""
+    access_token = tokens.get("access_token")
+    refresh_token = tokens.get("refresh_token")
+    if not access_token and not refresh_token:
+        return
+
+    path = _token_store_path()
+    merged = load_stored_oauth_tokens()
+    if access_token:
+        merged["access_token"] = access_token
+    if refresh_token:
+        merged["refresh_token"] = refresh_token
+    path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
 
 
 class KeapApiService:
@@ -27,9 +63,29 @@ class KeapApiService:
             api_key: Keap API key (will use KEAP_API_KEY env var if not provided)
             api_version: API version to use ('v1' or 'v2')
         """
-        self.api_key = api_key or os.getenv("KEAP_API_KEY")
-        if not self.api_key:
-            raise ValueError("KEAP_API_KEY must be provided or set in environment")
+        stored_tokens = load_stored_oauth_tokens()
+        self.access_token = (
+            api_key
+            or os.getenv("KEAP_ACCESS_TOKEN")
+            or stored_tokens.get("access_token")
+            or os.getenv("KEAP_API_KEY")
+        )
+        self.refresh_token = os.getenv("KEAP_REFRESH_TOKEN") or stored_tokens.get(
+            "refresh_token"
+        )
+        self.client_id = os.getenv("KEAP_CLIENT_ID")
+        self.client_secret = os.getenv("KEAP_CLIENT_SECRET")
+        self.oauth_redirect_uri = os.getenv("KEAP_OAUTH_REDIRECT_URI")
+        self.oauth_token_url = os.getenv(
+            "KEAP_OAUTH_TOKEN_URL", "https://api.infusionsoft.com/token"
+        )
+
+        if not self.access_token:
+            raise ValueError(
+                "KEAP_ACCESS_TOKEN or KEAP_API_KEY must be provided in environment"
+            )
+        # Backward compatibility for older callers/tests.
+        self.api_key = self.access_token
 
         self.api_version = api_version
         self.base_url = f"https://api.infusionsoft.com/crm/rest/{api_version}"
@@ -38,7 +94,7 @@ class KeapApiService:
         self.session = AsyncClient(
             base_url=self.base_url,
             headers={
-                "Authorization": f"Bearer {self.api_key}",
+                "Authorization": f"Bearer {self.access_token}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             },
@@ -65,6 +121,7 @@ class KeapApiService:
         # Enhanced retry configuration
         self.max_retries = 3
         self.retry_delay = 1.0
+        self._token_refresh_lock = asyncio.Lock()
 
         # Diagnostics and monitoring
         self.diagnostics = {
@@ -80,7 +137,75 @@ class KeapApiService:
             "error_counts": {},
             "cache_hits": 0,
             "cache_misses": 0,
+            "token_refreshes": 0,
         }
+
+    @staticmethod
+    def build_oauth_authorization_url(
+        client_id: str,
+        redirect_uri: str,
+        scope: str = "full",
+        state: Optional[str] = None,
+    ) -> str:
+        """Build Keap OAuth authorization URL."""
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": scope,
+        }
+        if state:
+            params["state"] = state
+        return (
+            "https://accounts.infusionsoft.com/app/oauth/authorize?"
+            + urlencode(params)
+        )
+
+    @staticmethod
+    async def exchange_code_for_tokens(
+        client_id: str, client_secret: str, code: str, redirect_uri: str
+    ) -> Dict[str, Any]:
+        """Exchange OAuth authorization code for access/refresh tokens."""
+        data = {
+            "grant_type": "authorization_code",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+            "redirect_uri": redirect_uri,
+        }
+        async with AsyncClient(timeout=30.0) as client:
+            response = await client.post("https://api.infusionsoft.com/token", data=data)
+            response.raise_for_status()
+            return response.json()
+
+    async def _refresh_access_token(self) -> bool:
+        """Refresh access token when OAuth refresh credentials are configured."""
+        if not all([self.refresh_token, self.client_id, self.client_secret]):
+            return False
+
+        async with self._token_refresh_lock:
+            data = {
+                "grant_type": "refresh_token",
+                "refresh_token": self.refresh_token,
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+            }
+            async with AsyncClient(timeout=30.0) as client:
+                response = await client.post(self.oauth_token_url, data=data)
+                if response.status_code != 200:
+                    logger.error("OAuth token refresh failed with status %s", response.status_code)
+                    return False
+                token_data = response.json()
+                new_access_token = token_data.get("access_token")
+                if not new_access_token:
+                    return False
+                self.access_token = new_access_token
+                self.session.headers["Authorization"] = f"Bearer {self.access_token}"
+                if token_data.get("refresh_token"):
+                    self.refresh_token = token_data["refresh_token"]
+                save_oauth_tokens(token_data)
+                self.diagnostics["token_refreshes"] += 1
+                return True
 
     async def close(self):
         """Close the HTTP session"""
@@ -243,9 +368,21 @@ class KeapApiService:
                             error=f"HTTP_{response.status_code}",
                         )
                         response.raise_for_status()
+                elif response.status_code == 401:
+                    if await self._refresh_access_token() and attempt < self.max_retries:
+                        logger.info("Access token refreshed; retrying request")
+                        continue
+                    response_time = time.time() - start_time
+                    self._update_diagnostics(
+                        endpoint,
+                        success=False,
+                        response_time=response_time,
+                        was_retry=was_retry,
+                        error="HTTP_401",
+                    )
+                    response.raise_for_status()
                 elif response.status_code in [
                     400,
-                    401,
                     403,
                     404,
                 ]:  # Client errors - don't retry
@@ -557,6 +694,7 @@ class KeapApiService:
         return {
             "api_version": self.api_version,
             "base_url": self.base_url,
+            "auth_mode": "oauth" if self.refresh_token else "api_key_or_token",
             "rate_limit_remaining": self.rate_limit_remaining,
             "cache_entries": len(self._tag_cache),
             "cache_age_seconds": time.time() - self._tag_cache_timestamp

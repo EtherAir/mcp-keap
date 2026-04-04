@@ -373,6 +373,68 @@ class TestErrorHandling:
                 await server.run_async()
 
 
+class TestHttpRoutes:
+    """Test custom HTTP routes registration and behavior."""
+
+    @pytest.mark.asyncio
+    async def test_health_routes_registered(self):
+        """Server should register root and /health endpoints."""
+        with patch("src.mcp.server.FastMCP") as mock_fastmcp:
+            mock_mcp_instance = MagicMock()
+            mock_fastmcp.return_value = mock_mcp_instance
+
+            KeapMCPServer()
+
+            route_paths = [
+                call.kwargs.get("path") or call.args[0]
+                for call in mock_mcp_instance.custom_route.call_args_list
+            ]
+            assert "/" in route_paths
+            assert "/health" in route_paths
+
+    @pytest.mark.asyncio
+    async def test_oauth_callback_hides_internal_error_details(self):
+        """OAuth callback should not leak raw exception details in HTTP responses."""
+        with patch("src.mcp.server.FastMCP") as mock_fastmcp:
+            mock_mcp_instance = MagicMock()
+            mock_fastmcp.return_value = mock_mcp_instance
+
+            callback_handler = None
+
+            def capture_custom_route(path, methods=None):
+                def decorator(func):
+                    nonlocal callback_handler
+                    if path == "/oauth/callback":
+                        callback_handler = func
+                    return func
+
+                return decorator
+
+            mock_mcp_instance.custom_route.side_effect = capture_custom_route
+
+            KeapMCPServer()
+            assert callback_handler is not None
+
+            request = MagicMock()
+            request.query_params.get.side_effect = lambda key: {"code": "abc"}.get(key)
+            request.base_url = "https://example.up.railway.app/"
+
+            with patch.dict(
+                "os.environ",
+                {"KEAP_CLIENT_ID": "id", "KEAP_CLIENT_SECRET": "secret"},
+                clear=False,
+            ):
+                with patch(
+                    "src.api.client.KeapApiService.exchange_code_for_tokens",
+                    new=AsyncMock(side_effect=RuntimeError("sensitive details")),
+                ):
+                    response = await callback_handler(request)
+
+            assert response.status_code == 500
+            assert b"sensitive details" not in response.body
+            assert b"Token exchange failed. Check server logs for details." in response.body
+
+
 class TestResourceFunctionContent:
     """Test the actual content of resource functions."""
 
