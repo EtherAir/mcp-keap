@@ -303,9 +303,13 @@ class KeapMCPServer:
                     "<p>You can return to ChatGPT/Claude and continue setup.</p>",
                     status_code=200,
                 )
-            except Exception as e:
+            except Exception:
+                logger.exception("Keap OAuth token exchange failed")
                 return JSONResponse(
-                    {"success": False, "error": f"Token exchange failed: {e}"},
+                    {
+                        "success": False,
+                        "error": "Token exchange failed. Check server logs for details.",
+                    },
                     status_code=500,
                 )
 
