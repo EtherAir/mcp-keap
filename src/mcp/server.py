@@ -31,7 +31,6 @@ class KeapMCPServer:
         self.mcp = FastMCP(name)
         self._register_tools()
         self._register_resources()
-        self._register_health_routes()
         self._register_oauth_routes()
 
     def _register_tools(self):
@@ -303,37 +302,11 @@ class KeapMCPServer:
                     "<p>You can return to ChatGPT/Claude and continue setup.</p>",
                     status_code=200,
                 )
-            except Exception:
-                logger.exception("Keap OAuth token exchange failed")
+            except Exception as e:
                 return JSONResponse(
-                    {
-                        "success": False,
-                        "error": "Token exchange failed. Check server logs for details.",
-                    },
+                    {"success": False, "error": f"Token exchange failed: {e}"},
                     status_code=500,
                 )
-
-    def _register_health_routes(self):
-        """Register basic health endpoints for platform health checks."""
-
-        @self.mcp.custom_route("/", methods=["GET"])
-        async def health_root(request):
-            from starlette.responses import JSONResponse
-
-            return JSONResponse(
-                {
-                    "status": "ok",
-                    "service": self.name,
-                    "version": self.version,
-                },
-                status_code=200,
-            )
-
-        @self.mcp.custom_route("/health", methods=["GET"])
-        async def health_check(request):
-            from starlette.responses import JSONResponse
-
-            return JSONResponse({"status": "ok"}, status_code=200)
 
     def list_tools(self):
         """List all registered tools."""

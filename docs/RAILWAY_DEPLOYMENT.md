@@ -26,10 +26,6 @@ Railway will use:
 python run.py --host 0.0.0.0 --port ${PORT:-5000} --transport streamable-http --path /mcp
 ```
 
-Health checks:
-- `/` returns 200 JSON health payload (used by Railway default health check).
-- `/health` returns 200 lightweight status.
-
 ## 4) Fully automatic connect flow (ChatGPT/Claude compatible)
 Expose and use this URL for the connector login step:
 
